@@ -1,0 +1,8 @@
+socguard \
+  --target winhost.example.local \
+  --username analyst \
+  --key-file ~/.ssh/id_ed25519 \
+  --output /tmp/socguard_logs \
+  --script-path 'C:\Tools\Lab\Collect-WindowsLogs.ps1' \
+  --remote-output-dir 'C:\Tools\Lab' \
+  --transport ssh
