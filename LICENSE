@@ -20,4 +20,33 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+---
+
+# Why Python?
+
+- Mature libraries for **WinRM** (`pypsrp`) and **SSH/SFTP** (`paramiko`)
+- Easy to package for Kali (pipx / .deb)
+- Clean CLI with no runtime compilation
+
+---
+
+# Best practices applied
+
+- **TLS validation on by default** (WinRM)  
+- **SSH keys recommended**; host key policy configurable (reject/warning/autoadd)  
+- **No password echo** (prompts when omitted)  
+- **Chunked downloads over WinRM** to avoid envelope size limits  
+- **Clear exit codes** (0 = success, 2 = hash mismatch)  
+- **Separation of concerns** (connector modules, core orchestration, utils)
+
+---
+
+# Quickstart Recap
+
+1) Prep Windows (WinRM HTTPS or SSH).  
+2) Install SOCguard:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/<your-user>/socguard/main/install.sh | bash
+
 -truvine4pf
