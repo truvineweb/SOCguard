@@ -73,5 +73,23 @@ wc -l tmp/*.csv
 
 
 *#Troubleshooting (no Windows file placement required)*
+- WinRM HTTPS reachable?
+
+nmap -p 5986 192.168.1.100
+curl -vk https://192.168.1.100:5986/wsman   # 401 is normal without creds
+
+- SSH reachable?
+
+nmap -p 22 192.168.1.100
+
+
+#If Download of script fails on Windows:
+	•	Ensure the Raw URL is correct.
+
+#If No ZIP found: your collector didn’t generate System_Logs_*.zip in C:\ProgramData\SOCguard\out.
+	•	Check the script’s output directory param. We run it with -OutputDirectory "C:\ProgramData\SOCguard\out".
+	•	Confirm the Windows session has rights (for Security logs, best to run as admin).
+
+
 
 
