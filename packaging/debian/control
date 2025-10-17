@@ -1,1 +1,26 @@
+Source: socguard
+Section: admin
+Priority: optional
+Maintainer: Your Name <you@example.com>
+Standards-Version: 4.6.2
+Homepage: https://github.com/<your-user>/socguard
+Rules-Requires-Root: no
+Build-Depends:
+ debhelper-compat (= 13),
+ dh-python,
+ pybuild-plugin-pyproject,
+ python3-all
 
+Package: socguard
+Architecture: all
+Depends:
+ ${misc:Depends},
+ ${python3:Depends},
+ python3-paramiko,
+ python3-requests,
+ python3-pypsrp,
+ python3-pyspnego
+Description: SOCguard – Remote Windows log collection orchestrator
+ SOCguard connects to a Windows host over WinRM (HTTPS) or SSH, runs your
+ existing PowerShell collection script, downloads the resulting ZIP and
+ optional SHA-256 sidecar, and verifies integrity. Designed for Kali/Ubuntu.
