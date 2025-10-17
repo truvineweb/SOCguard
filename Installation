@@ -15,10 +15,63 @@ pipx install "git+https://github.com/truvineweb/socguard.git@main"
 # Confirm the CLI is on PATH
 socguard --help
 
-#Add two flags so SOCguard pulls your script from GitHub
+#Prepare the Windows service (not files): WinRM or SSH only
 
-p.add_argument("--script-url", help="Raw GitHub URL to the PowerShell collector (download & run remotely)")
-p.add_argument("--remote-workdir", default=r"C:\ProgramData\SOCguard",
-               help="Remote working directory on Windows (created if missing)")
+	•	WinRM over HTTPS (recommended): create a listener w/ TLS; SOCguard validates the cert (use org CA or pass --winrm-ca).
+	•	Or SSH (alternative): enable OpenSSH Server on Windows and use an SSH key.
+
+#powershell
+# WinRM HTTPS (Administrator PowerShell)
+winrm quickconfig -force
+$cert = New-SelfSignedCertificate -DnsName $env:COMPUTERNAME -CertStoreLocation Cert:\LocalMachine\My
+$thumb = $cert.Thumbprint
+winrm create winrm/config/Listener?Address=*+Transport=HTTPS "@{Hostname=`"$env:COMPUTERNAME`"; CertificateThumbprint=`"$thumb`"}"
+winrm set winrm/config/service/auth '@{Basic="true";Negotiate="true"}'
+New-NetFirewallRule -DisplayName "WinRM HTTPS" -Direction Inbound -Protocol TCP -LocalPort 5986 -Action Allow
+
+#(SSH alternative also works — enable sshd, open TCP/22.)
+
+#Run SOCguard from Kali using your GitHub Raw URL
+#LInux Bash
+
+# Safer than putting passwords on the command line:
+read -s SOCGUARD_PASS && export SOCGUARD_PASS
+
+SCRIPT_URL="https://raw.githubusercontent.com/truvineweb/socguard/refs/heads/main/Windows/Collect-WindowsLogs.ps1"
+
+socguard \
+  --target 192.168.1.100 \
+  --username 'admin' \
+  --password "$SOCGUARD_PASS" \
+  --output "$HOME/socguard_out" \
+  --script-url "$SCRIPT_URL" \
+  --remote-workdir 'C:\ProgramData\SOCguard' \
+  --transport winrm
+
+#Prefer SSH? Use --transport ssh and --key-file ~/.ssh/id_ed25519 (no password flag). Same --script-url and --remote-workdir apply.
+
+#Verify on Kali
+cd "$HOME/socguard_out"
+
+# See files
+ls -lh
+
+# Peek inside without extracting
+unzip -l System_Logs_*.zip
+
+# Check SHA-256
+sha256sum System_Logs_*.zip
+# If sidecar present:
+cat System_Logs_*.sha256.txt
+
+# Optional: extract and glance at CSVs
+mkdir -p tmp && unzip -q System_Logs_*.zip -d tmp
+head -n 5 tmp/*_Logs_*.csv
+wc -l tmp/*.csv
+
+
+
+
+*#Troubleshooting (no Windows file placement required)*
 
 
