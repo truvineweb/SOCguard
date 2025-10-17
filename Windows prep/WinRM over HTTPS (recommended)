@@ -1,0 +1,18 @@
+# Install WinRM service (if needed)
+winrm quickconfig
+
+# Create a self-signed cert (or use your PKI):
+$cert = New-SelfSignedCertificate -DnsName "winhost.example.local" -CertStoreLocation Cert:\LocalMachine\My
+$thumb = $cert.Thumbprint
+
+# Bind cert to WinRM HTTPS
+winrm create winrm/config/Listener?Address=*+Transport=HTTPS "@{Hostname=`"winhost.example.local`"; CertificateThumbprint=`"$thumb`"}"
+
+# Enable Basic/Negotiate (only over HTTPS)
+winrm set winrm/config/service/auth '@{Basic="true"; Negotiate="true"}'
+
+# Increase envelope size if needed (big files)
+winrm set winrm/config '@{MaxEnvelopeSizekb="8192"}'
+
+# Open firewall
+New-NetFirewallRule -DisplayName "WinRM HTTPS" -Direction Inbound -Protocol TCP -LocalPort 5986 -Action Allow
