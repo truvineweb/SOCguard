@@ -15,9 +15,10 @@ pipx install "git+https://github.com/truvineweb/socguard.git@main"
 # Confirm the CLI is on PATH
 socguard --help
 
-OR
-One-liner
+#Add two flags so SOCguard pulls your script from GitHub
 
-#Kali terminal
-curl -fsSL https://raw.githubusercontent.com/truvineweb/socguard/main/install.sh | bash
+p.add_argument("--script-url", help="Raw GitHub URL to the PowerShell collector (download & run remotely)")
+p.add_argument("--remote-workdir", default=r"C:\ProgramData\SOCguard",
+               help="Remote working directory on Windows (created if missing)")
+
 
