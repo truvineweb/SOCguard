@@ -1,1 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
 
+[project]
+name = "socguard"
+version = "0.1.0"
+description = "SOCguard: Remote Windows log collection orchestrator for Linux (WinRM HTTPS / SSH)"
+authors = [{ name = "Your Name", email = "you@example.com" }]
+license = { text = "MIT" }
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "pypsrp>=0.8.1",   # WinRM PSRP client (HTTPS)
+  "paramiko>=3.4.0", # SSH/SFTP
+  "pyspnego>=0.11.2; platform_system!='Windows'",  # helps negotiate auth on Linux
+  "requests>=2.32.0"
+]
+
+[project.scripts]
+socguard = "socguard.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+packages = [
+  "socguard",
+  "socguard.connectors",
+]
+include-package-data = true
