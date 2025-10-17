@@ -1,1 +1,23 @@
+A secure install on Kali, Windows prep (WinRM over HTTPS or SSH), running SOCguard to collect logs via your Collect-WindowsLogs.ps1, verifying the download with checksums, and friendly troubleshooting
+
+#Install SOCguard on Kali Linux
+
+#Direct from GitHub with pipx
+
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip pipx git
+python3 -m pipx ensurepath
+export PATH="$HOME/.local/bin:$PATH"
+
+# Install your repo directly
+pipx install "git+https://github.com/truvineweb/socguard.git@main"
+
+# Confirm the CLI is on PATH
+socguard --help
+
+OR
+One-liner
+
+#Kali terminal
+curl -fsSL https://raw.githubusercontent.com/truvineweb/socguard/main/install.sh | bash
 
