@@ -60,6 +60,13 @@ socguard \
   --transport ssh
 
 #Verify on Kali
+After a successful run, you'll have something like:
+
+~/socguard_out/
+  System_Logs_20251017_111004.zip
+  System_Logs_20251017_111004.sha256.txt   (if present)
+
+
 cd "$HOME/socguard_out"
 
 # See files
@@ -69,13 +76,17 @@ ls -lh
 unzip -l System_Logs_*.zip
 
 # Check SHA-256
+# Show what SOCguard computed (or compute now if no sidecar)
 sha256sum System_Logs_*.zip
-# If sidecar present:
-cat System_Logs_*.sha256.txt
+
+# Peek at sidecar (if downloaded from Windows)
+cat System_Logs_*.sha256.tx
 
 # Optional: extract and glance at CSVs
 mkdir -p tmp && unzip -q System_Logs_*.zip -d tmp
 head -n 5 tmp/*_Logs_*.csv
+
+#count record
 wc -l tmp/*.csv
 
 
