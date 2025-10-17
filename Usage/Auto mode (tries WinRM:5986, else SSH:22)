@@ -1,0 +1,1 @@
+socguard --target 10.10.10.50 --username analyst --output /tmp/socguard_logs
