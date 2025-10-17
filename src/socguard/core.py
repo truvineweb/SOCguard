@@ -1,9 +1,8 @@
 import os
 import sys
-import time
 import getpass
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 from .utils import (
     ensure_dir, sha256_file, parse_sha256_sidecar,
@@ -21,13 +20,20 @@ class SocGuard:
         username: Optional[str] = None,
         password: Optional[str] = None,
         key_file: Optional[str] = None,
-        script_path: str = r"C:\Tools\Lab\Collect-WindowsLogs.ps1",
-        remote_output_dir: str = r"C:\Tools\Lab",
+
+        # NEW: GitHub-first workflow
+        script_url: Optional[str] = None,
+        remote_workdir: str = r"C:\ProgramData\SOCguard",
+
+        # Legacy fallback (used only if --script-url is not provided)
+        script_path: str = r"C:\ProgramData\SOCguard\work\Collect-WindowsLogs.ps1",
+        remote_output_dir: str = r"C:\ProgramData\SOCguard\out",
+
         winrm_port: int = 5986,
         winrm_insecure: bool = False,
         winrm_ca: Optional[str] = None,
         ssh_port: int = 22,
-        ssh_host_key_policy: str = "warning",  # warning | reject | autoadd
+        ssh_host_key_policy: str = "warning",
         known_hosts: Optional[str] = None,
         timeout: int = 600,
     ):
@@ -37,8 +43,13 @@ class SocGuard:
         self.username = username
         self.password = password
         self.key_file = key_file
+
+        self.script_url = script_url
+        self.remote_workdir = remote_workdir
+
         self.script_path = script_path
         self.remote_output_dir = remote_output_dir
+
         self.winrm_port = winrm_port
         self.winrm_insecure = winrm_insecure
         self.winrm_ca = winrm_ca
@@ -49,7 +60,7 @@ class SocGuard:
 
         ensure_dir(self.output_dir)
 
-    # ---------- MAIN WORKFLOW ----------
+    # ---------- MAIN ----------
     def run(self) -> int:
         print("[*] Starting SOCguard workflow")
         method = self._choose_transport()
@@ -60,21 +71,61 @@ class SocGuard:
         else:
             return self._run_over_ssh()
 
-    # ---------- TRANSPORT CHOICE ----------
     def _choose_transport(self) -> str:
         if self.transport in ("winrm", "ssh"):
             return self.transport
-        # 'auto': prefer WinRM 5986 first by trying a quick TCP connect
+        # auto-detect: try WinRM port first
         import socket
         try:
             with socket.create_connection((self.target, self.winrm_port), timeout=3):
                 return "winrm"
         except Exception:
             pass
-        # Fallback to SSH
         return "ssh"
 
-    # ---------- RUN OVER WINRM ----------
+    # ---------- HELPERS ----------
+    def _ps_prep_script_from_url_text(self) -> str:
+        """
+        PowerShell that:
+          - creates work & out dirs under self.remote_workdir
+          - downloads the script from self.script_url into work\Collect-WindowsLogs.ps1
+          - prints sentinel lines so we can parse exact paths
+        """
+        work = rf"{self.remote_workdir}\work"
+        out  = rf"{self.remote_workdir}\out"
+        script_path = rf"{work}\Collect-WindowsLogs.ps1"
+        url = (self.script_url or "").replace('"','`"')
+
+        ps = rf"""
+$ErrorActionPreference='Stop'
+New-Item -ItemType Directory -Force -Path '{self.remote_workdir}' | Out-Null
+New-Item -ItemType Directory -Force -Path '{work}' | Out-Null
+New-Item -ItemType Directory -Force -Path '{out}'  | Out-Null
+
+try {{
+  Invoke-WebRequest -Uri "{url}" -OutFile "{script_path}" -UseBasicParsing
+}} catch {{
+  throw "Failed to download collector from GitHub: $($_.Exception.Message)"
+}}
+
+Write-Output ("SCRIPT={0}" -f "{script_path}")
+Write-Output ("OUT={0}" -f "{out}")
+"""
+        return ps.strip()
+
+    def _parse_script_out_lines(self, text: str) -> tuple[str, str]:
+        script_to_run = None
+        outdir_to_use = None
+        for line in (l.strip() for l in text.splitlines()):
+            if line.startswith("SCRIPT="):
+                script_to_run = line.split("=",1)[1]
+            elif line.startswith("OUT="):
+                outdir_to_use = line.split("=",1)[1]
+        if not script_to_run or not outdir_to_use:
+            raise SystemExit("Failed to prepare remote workdir/script from URL.")
+        return script_to_run, outdir_to_use
+
+    # ---------- WINRM ----------
     def _run_over_winrm(self) -> int:
         if not self.username:
             raise SystemExit("Username is required for WinRM.")
@@ -92,30 +143,43 @@ class SocGuard:
             negotiate=True,
         )
 
-        # 1) Trigger Windows script
+        # A) Prepare: either download from URL (preferred) or use legacy paths
+        if self.script_url:
+            print("[*] Preparing remote script from GitHub Raw...")
+            prep_ps = self._ps_prep_script_from_url_text()
+            stdout, stderr, rc = client.run_ps(prep_ps)
+            if rc != 0:
+                print(stderr or stdout)
+                raise SystemExit("Failed to prepare remote script from URL.")
+            script_to_run, outdir_to_use = self._parse_script_out_lines(stdout)
+        else:
+            script_to_run = self.script_path
+            outdir_to_use = self.remote_output_dir
+
+        # B) Run collector
         print("[*] Running remote PowerShell collector...")
-        script = windows_escape_path(self.script_path)
-        outdir = windows_escape_path(self.remote_output_dir)
-        ps = rf"""
+        p_script = windows_escape_path(script_to_run)
+        p_out    = windows_escape_path(outdir_to_use)
+        ps_run = rf"""
 $ErrorActionPreference='Stop'
-& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File {script} -OutputDirectory {outdir} -Format CSV
+& powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -File {p_script} -OutputDirectory {p_out} -Format CSV
 if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}
 """
-        stdout, stderr, rc = client.run_ps(ps)
+        stdout, stderr, rc = client.run_ps(ps_run)
         if rc != 0:
             print(stderr or stdout)
             raise SystemExit(f"Remote collector failed with code {rc}")
 
-        # 2) Find latest ZIP + sha256
+        # C) Locate newest ZIP + sidecar in that outdir
         print("[*] Locating newest ZIP on remote...")
-        ps_list = pick_latest_remote_zip_cmd(self.remote_output_dir)
+        ps_list = pick_latest_remote_zip_cmd(outdir_to_use)
         stdout, stderr, rc = client.run_ps(ps_list)
         if rc != 0:
             print(stderr or stdout)
             raise SystemExit("Failed to query remote logs.")
         lines = [l.strip() for l in stdout.splitlines() if l.strip()]
         if not lines or lines[0] == "ZIP=NULL":
-            raise SystemExit("No ZIP found on remote output directory.")
+            raise SystemExit("No ZIP found in remote output directory.")
 
         remote_zip = lines[0]
         remote_sha = None if len(lines) < 2 or lines[1] == "SHA=NULL" else lines[1]
@@ -123,14 +187,14 @@ if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}
         if remote_sha:
             print(f"    SHA: {remote_sha}")
 
-        # 3) Download (chunked Base64)
+        # D) Download over WinRM (chunked base64)
         local_zip = str(Path(self.output_dir) / Path(remote_zip).name)
-        print("[*] Downloading ZIP (chunked base64 over WinRM)...")
+        print("[*] Downloading ZIP (WinRM/chunked)...")
         ps_dl = read_file_as_base64_chunks_ps(remote_zip)
         stdout, stderr, rc = client.run_ps(ps_dl)
         if rc != 0:
-            print(stderr[:5000])
-            raise SystemExit("Failed downloading zip via WinRM.")
+            print(stderr or stdout)
+            raise SystemExit("Failed downloading ZIP via WinRM.")
         write_bytes_from_base64_lines(stdout.splitlines(), local_zip)
 
         local_sha = None
@@ -142,16 +206,15 @@ if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}
                 local_sha = str(Path(self.output_dir) / Path(remote_sha).name)
                 write_bytes_from_base64_lines(stdout.splitlines(), local_sha)
             else:
-                print("[!] Could not download .sha256.txt, will compute locally.")
+                print("[!] Could not download .sha256.txt; will compute locally.")
 
         return self._verify(local_zip, local_sha)
 
-    # ---------- RUN OVER SSH ----------
+    # ---------- SSH ----------
     def _run_over_ssh(self) -> int:
         if not self.username:
             raise SystemExit("Username is required for SSH.")
         if (self.password is None) and (self.key_file is None):
-            # Prefer key auth; prompt only if neither was supplied
             try:
                 self.password = getpass.getpass("Password (leave empty to try agent/keys): ")
                 if not self.password:
@@ -169,27 +232,43 @@ if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}
             known_hosts=self.known_hosts,
         )
         cli.connect()
-
         try:
+            # A) Prepare script
+            if self.script_url:
+                print("[*] Preparing remote script from GitHub Raw (SSH)...")
+                ps_pre = self._ps_prep_script_from_url_text()
+                cmd = f'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "{ps_pre.replace(\'"\', \'`\\"\')}"'
+                out, err, rc = cli.run_cmd(cmd)
+                if rc != 0:
+                    print(out or err)
+                    raise SystemExit("Failed to prepare remote script from URL (SSH).")
+                script_to_run, outdir_to_use = self._parse_script_out_lines(out)
+            else:
+                script_to_run = self.script_path
+                outdir_to_use = self.remote_output_dir
+
+            # B) Run collector
             print("[*] Running remote PowerShell collector over SSH...")
-            script = self.script_path.replace('"', '\\"')
-            outdir = self.remote_output_dir.replace('"', '\\"')
-            cmd = f'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "{script}" -OutputDirectory "{outdir}" -Format CSV'
+            cmd = (
+                'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass '
+                f'-File "{script_to_run}" -OutputDirectory "{outdir_to_use}" -Format CSV'
+            )
             out, err, rc = cli.run_cmd(cmd)
             if rc != 0:
                 print(out or err)
                 raise SystemExit(f"Remote collector failed with code {rc}")
 
+            # C) Locate newest ZIP
             print("[*] Locating newest ZIP on remote...")
-            ps = pick_latest_remote_zip_cmd(self.remote_output_dir)
-            cmd = f'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "{ps.replace("\"", "`\"")}"'
+            ps_list = pick_latest_remote_zip_cmd(outdir_to_use)
+            cmd = f'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "{ps_list.replace(\'"\', \'`\\"\')}"'
             out, err, rc = cli.run_cmd(cmd)
             if rc != 0:
                 print(out or err)
                 raise SystemExit("Failed to query remote logs.")
             lines = [l.strip() for l in out.splitlines() if l.strip()]
             if not lines or lines[0] == "ZIP=NULL":
-                raise SystemExit("No ZIP found on remote output directory.")
+                raise SystemExit("No ZIP found in remote output directory.")
 
             remote_zip = lines[0]
             remote_sha = None if len(lines) < 2 or lines[1] == "SHA=NULL" else lines[1]
@@ -197,6 +276,7 @@ if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}
             if remote_sha:
                 print(f"    SHA: {remote_sha}")
 
+            # D) Download via SFTP
             local_zip = str(Path(self.output_dir) / Path(remote_zip).name)
             print("[*] Downloading ZIP via SFTP...")
             cli.sftp_get(remote_zip, local_zip)
@@ -208,7 +288,7 @@ if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}
                     local_sha = str(Path(self.output_dir) / Path(remote_sha).name)
                     cli.sftp_get(remote_sha, local_sha)
                 except Exception:
-                    print("[!] Could not download .sha256.txt, will compute locally.")
+                    print("[!] Could not download .sha256.txt; will compute locally.")
 
             return self._verify(local_zip, local_sha)
         finally:
@@ -229,8 +309,10 @@ if ($LASTEXITCODE -ne 0) {{ exit $LASTEXITCODE }}
                 return 2
         else:
             print(f"[i] No sidecar hash provided. Computed SHA-256: {computed}")
-            # Save our own sidecar for provenance
             sidecar = f"{local_zip}.sha256.txt"
-            Path(sidecar).write_text(f"SHA256: {computed}\nFile: {Path(local_zip).name}\n", encoding="utf-8")
+            Path(sidecar).write_text(
+                f"SHA256: {computed}\nFile: {Path(local_zip).name}\n",
+                encoding="utf-8"
+            )
             print(f"[i] Wrote local sidecar: {sidecar}")
             return 0
