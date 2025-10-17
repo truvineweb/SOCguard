@@ -50,6 +50,15 @@ socguard \
 
 #Prefer SSH? Use --transport ssh and --key-file ~/.ssh/id_ed25519 (no password flag). Same --script-url and --remote-workdir apply.
 
+socguard \
+  --target 192.168.1.100 \
+  --username 'admin' \
+  --key-file ~/.ssh/id_ed25519 \
+  --output "$HOME/socguard_out" \
+  --script-url "$SCRIPT_URL" \
+  --remote-workdir 'C:\ProgramData\SOCguard' \
+  --transport ssh
+
 #Verify on Kali
 cd "$HOME/socguard_out"
 
